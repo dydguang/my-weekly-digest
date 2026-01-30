@@ -69,46 +69,54 @@ def pubmed_search(query: str, days_back: int = 7, retmax: int = 20):
 
 
 def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
-    endpoint = "https://classic.clinicaltrials.gov/api/query/study_fields"
-    fields = ["NCTId","BriefTitle","OverallStatus","LastUpdatePostDate","Phase"]
+    endpoint = "https://clinicaltrials.gov/api/v2/studies"
+    cutoff_date = (datetime.now(TZ_UTC) - timedelta(days=days_back)).date().isoformat()
+
+    # 方案A：用 sort=LastUpdatePostDate:desc（新站点 v2 常见写法）
     params = {
-        "expr": query,
-        "fields": ",".join(fields),
-        "min_rnk": "1",
-        "max_rnk": str(page_size),
-        "fmt": "json",
+        "query.term": query,
+        "pageSize": str(page_size),
+        "sort": "LastUpdatePostDate:desc",
     }
 
     r = requests.get(endpoint, params=params, timeout=30)
+    if r.status_code == 400:
+        # 方案B（兜底）：不用 sort，改用“网站同款语法”把 LastUpdatePostDate 写进 query 里
+        # 网站 URL 里常见 term=AREA[LastUpdatePostDate] RANGE[YYYY-MM-DD,MAX] 这种表达式
+        # 这样即使 sort 规则变动，也能先拿到最近更新的数据
+        params = {
+            "query.term": f'AREA[LastUpdatePostDate] RANGE[{cutoff_date},MAX] AND ({query})',
+            "pageSize": str(page_size),
+        }
+        r = requests.get(endpoint, params=params, timeout=30)
+
     r.raise_for_status()
     js = r.json()
 
-    studies = js.get("StudyFieldsResponse", {}).get("StudyFields", [])
-    cutoff = datetime.now(TZ_UTC) - timedelta(days=days_back)
+    studies = js.get("studies", [])
     items = []
-
     for s in studies:
-        nct = (s.get("NCTId") or [""])[0]
-        title = (s.get("BriefTitle") or ["Clinical trial update"])[0]
-        status = (s.get("OverallStatus") or [""])[0]
-        last_update = (s.get("LastUpdatePostDate") or [""])[0]
-        phase = (s.get("Phase") or [""])[0]
+        prot = (s.get("protocolSection") or {})
+        ident = (prot.get("identificationModule") or {})
+        status = (prot.get("statusModule") or {})
 
-        keep = True
-        if last_update:
-            try:
-                dt = datetime.strptime(last_update, "%B %d, %Y").replace(tzinfo=TZ_UTC)
-                keep = dt >= cutoff
-            except Exception:
-                keep = True
+        nct = ident.get("nctId") or ""
+        title = ident.get("briefTitle") or "Clinical trial update"
+        last_update = status.get("lastUpdatePostDate") or ""
+        overall = status.get("overallStatus") or ""
+        url = f"https://clinicaltrials.gov/study/{nct}" if nct else "https://clinicaltrials.gov/"
 
-        if keep:
-            url = f"https://clinicaltrials.gov/study/{nct}" if nct else "https://clinicaltrials.gov/"
-            meta = " | ".join([x for x in [status, phase, f"last update: {last_update}"] if x])
-            items.append(
-                {"source":"ClinicalTrials.gov","id":f"NCT:{nct}" if nct else f"CT:{hash(title)}",
-                 "title":title,"meta":meta,"url":url,"snippet":""}
-            )
+        items.append(
+            {
+                "source": "ClinicalTrials.gov",
+                "id": f"NCT:{nct}" if nct else f"CT:{hash(title)}",
+                "title": title,
+                "meta": f"{overall} | last update: {last_update}",
+                "url": url,
+                "snippet": "",
+            }
+        )
+
     return items
 
 

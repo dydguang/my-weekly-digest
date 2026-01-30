@@ -69,59 +69,71 @@ def pubmed_search(query: str, days_back: int = 7, retmax: int = 20):
 
 def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
     """
-    ClinicalTrials.gov API v2 /api/v2/studies supports query.term.
-    Docs: https://clinicaltrials.gov/data-api/api
-    Migration guide: /api/v2/studies (API v2)
+    Use ClinicalTrials.gov legacy API (stable):
+    /api/query/study_fields?expr=...&fields=...&min_rnk=...&max_rnk=...&fmt=json
     """
-    # API provides lastUpdatePostDate etc; we'll just fetch recent-ish and let summary decide.
-    endpoint = "https://clinicaltrials.gov/api/v2/studies"
+    endpoint = "https://clinicaltrials.gov/api/query/study_fields"
+    fields = [
+        "NCTId",
+        "BriefTitle",
+        "OverallStatus",
+        "LastUpdatePostDate",
+        "Condition",
+        "Phase",
+    ]
     params = {
-        "query.term": query,
-        "pageSize": str(page_size),
-        # Sorting newest first (works in v2)
-        "sort": "@lastUpdatePostDate:desc",
-        # fields is optional; omit for simplicity
+        "expr": query,
+        "fields": ",".join(fields),
+        "min_rnk": "1",
+        "max_rnk": str(page_size),
+        "fmt": "json",
     }
+
     r = requests.get(endpoint, params=params, timeout=30)
     r.raise_for_status()
     js = r.json()
-    studies = js.get("studies", [])
-    items = []
+
+    studies = (
+        js.get("StudyFieldsResponse", {})
+          .get("StudyFields", [])
+    )
 
     cutoff = datetime.now(TZ_UTC) - timedelta(days=days_back)
+    items = []
+
     for s in studies:
-        prot = (s.get("protocolSection") or {})
-        ident = (prot.get("identificationModule") or {})
-        status = (prot.get("statusModule") or {})
+        # 每个字段都是 list（即使只有一个值）
+        nct = (s.get("NCTId") or [""])[0]
+        title = (s.get("BriefTitle") or ["Clinical trial update"])[0]
+        status = (s.get("OverallStatus") or [""])[0]
+        last_update = (s.get("LastUpdatePostDate") or [""])[0]
+        phase = (s.get("Phase") or [""])[0]
 
-        nct = ident.get("nctId") or ""
-        title = ident.get("briefTitle") or "Clinical trial update"
-        last_update = status.get("lastUpdatePostDate") or ""
-        overall = status.get("overallStatus") or ""
-        url = f"https://clinicaltrials.gov/study/{nct}" if nct else "https://clinicaltrials.gov/"
-
-        # try to filter by days_back if parseable
         keep = True
         if last_update:
             try:
-                dt = datetime.fromisoformat(last_update).replace(tzinfo=TZ_UTC)
+                # legacy 常见格式：'January 15, 2026'
+                dt = datetime.strptime(last_update, "%B %d, %Y").replace(tzinfo=TZ_UTC)
                 keep = dt >= cutoff
             except Exception:
                 keep = True
 
         if keep:
+            url = f"https://clinicaltrials.gov/study/{nct}" if nct else "https://clinicaltrials.gov/"
+            meta = " | ".join([x for x in [status, phase, f"last update: {last_update}"] if x])
             items.append(
                 {
                     "source": "ClinicalTrials.gov",
                     "id": f"NCT:{nct}" if nct else f"CT:{hash(title)}",
                     "title": title,
-                    "meta": f"{overall} | last update: {last_update}",
+                    "meta": meta,
                     "url": url,
                     "snippet": "",
                 }
             )
 
     return items
+
 
 
 def build_prompt(items):

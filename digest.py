@@ -69,7 +69,7 @@ def pubmed_search(query: str, days_back: int = 7, retmax: int = 20):
 
 
 def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
-    endpoint = "https://clinicaltrials.gov/api/query/study_fields"
+    endpoint = "https://classic.clinicaltrials.gov/api/query/study_fields"
     fields = ["NCTId","BriefTitle","OverallStatus","LastUpdatePostDate","Phase"]
     params = {
         "expr": query,

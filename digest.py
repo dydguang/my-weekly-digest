@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 from openai import OpenAI
+print("DIGEST VERSION: 2026-01-30 CT-LEGACY")
 
 TZ_UTC = timezone.utc
 
@@ -68,19 +69,8 @@ def pubmed_search(query: str, days_back: int = 7, retmax: int = 20):
 
 
 def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
-    """
-    Use ClinicalTrials.gov legacy API (stable):
-    /api/query/study_fields?expr=...&fields=...&min_rnk=...&max_rnk=...&fmt=json
-    """
     endpoint = "https://clinicaltrials.gov/api/query/study_fields"
-    fields = [
-        "NCTId",
-        "BriefTitle",
-        "OverallStatus",
-        "LastUpdatePostDate",
-        "Condition",
-        "Phase",
-    ]
+    fields = ["NCTId","BriefTitle","OverallStatus","LastUpdatePostDate","Phase"]
     params = {
         "expr": query,
         "fields": ",".join(fields),
@@ -93,16 +83,11 @@ def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
     r.raise_for_status()
     js = r.json()
 
-    studies = (
-        js.get("StudyFieldsResponse", {})
-          .get("StudyFields", [])
-    )
-
+    studies = js.get("StudyFieldsResponse", {}).get("StudyFields", [])
     cutoff = datetime.now(TZ_UTC) - timedelta(days=days_back)
     items = []
 
     for s in studies:
-        # 每个字段都是 list（即使只有一个值）
         nct = (s.get("NCTId") or [""])[0]
         title = (s.get("BriefTitle") or ["Clinical trial update"])[0]
         status = (s.get("OverallStatus") or [""])[0]
@@ -112,7 +97,6 @@ def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
         keep = True
         if last_update:
             try:
-                # legacy 常见格式：'January 15, 2026'
                 dt = datetime.strptime(last_update, "%B %d, %Y").replace(tzinfo=TZ_UTC)
                 keep = dt >= cutoff
             except Exception:
@@ -122,17 +106,11 @@ def clinicaltrials_search(query: str, days_back: int = 7, page_size: int = 20):
             url = f"https://clinicaltrials.gov/study/{nct}" if nct else "https://clinicaltrials.gov/"
             meta = " | ".join([x for x in [status, phase, f"last update: {last_update}"] if x])
             items.append(
-                {
-                    "source": "ClinicalTrials.gov",
-                    "id": f"NCT:{nct}" if nct else f"CT:{hash(title)}",
-                    "title": title,
-                    "meta": meta,
-                    "url": url,
-                    "snippet": "",
-                }
+                {"source":"ClinicalTrials.gov","id":f"NCT:{nct}" if nct else f"CT:{hash(title)}",
+                 "title":title,"meta":meta,"url":url,"snippet":""}
             )
-
     return items
+
 
 
 
